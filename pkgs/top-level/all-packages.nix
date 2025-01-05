@@ -11941,6 +11941,7 @@ with pkgs;
   snipe-it = callPackage ../by-name/sn/snipe-it/package.nix {
     php = php81;
   };
+  statping-ng = callPackage ../servers/monitoring/statping-ng { };
 
   spacecookie =
     haskell.lib.compose.justStaticExecutables haskellPackages.spacecookie;
