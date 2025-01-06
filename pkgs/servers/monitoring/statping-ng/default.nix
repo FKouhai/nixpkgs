@@ -18,14 +18,14 @@
   jq,
   faketty,
   xcbuild,
-  tzdata
+  tzdata,
 }:
 buildGoModule rec {
   pname = "statping-ng";
   version = "v0.91.0";
 
   subPackages = [
-    "cmd"
+    "cmd/"
   ];
   src = fetchFromGitHub {
     owner = "statping-ng";
@@ -47,33 +47,47 @@ buildGoModule rec {
         moreutils
         jq
         python3
+        faketty
+        go
+        git
       ]
       ++ lib.optionals stdenv.hostPlatform.isDarwin [xcbuild.xcbuild];
     buildPhase = ''
       runHook preBuild
       export HOME="$(mktemp -d)"
       cd frontend
+
+      mkdir yarnCache
       yarn config set enableTelemetry 0
-      yarn config set cacheFolder $out
+      yarn config set cacheFolder yarnCache
+      yarn
+      yarn --install --offline --cache-folder yarnCache
       yarn config set --json supportedArchitectures.os '[ "linux", "darwin" ]'
       yarn config set --json supportedArchitectures.cpu '["arm64", "x64"]'
-      yarn
       runHook postBuild
     '';
+  installPhase = ''
+    mkdir -p $out
+    cp -r yarnCache/v6 $out
+    cp -r node_modules $out
+    '';
     dontConfigure = true;
-    dontInstall = true;
+    dontInstall = false;
     dontFixup = true;
     outputHashMode = "recursive";
+    doCheck = false;
+    outputHashAlgo = "sha256";
     outputHash =
       rec {
-        x86_64-linux = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        x86_64-linux = "sha256-8EBYhJXHpOIh1AghUfXbFSdSyzUErE6ia4nu7BX0JOg=";
+        #x86_64-linux = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         aarch64-linux = x86_64-linux;
-        aarch64-darwin = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        #aarch64-darwin = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
       }
       .${stdenv.hostPlatform.system}
       or (throw "Unsupported system: ${stdenv.hostPlatform.system}");
   };
-  #disallowedRequisites = [offlineCache];
+  disallowedRequisites = [ offlineCache ];
   vendorHash = "sha256-ZcNOI5/Fs7/U8/re89YpJ3qlMaQStLrrNHXiHuBQwQk=";
   proxyVendor = true;
   nativeBuildInputs =
@@ -92,26 +106,32 @@ buildGoModule rec {
     # Help node-gyp find Node.js headers
     # (see https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/javascript.section.md#pitfalls-javascript-yarn2nix-pitfalls)
     export HOME="$(mktemp -d)"
-    #mkdir -p $HOME/.node-gyp/${nodejs.version}
-    #echo 9 > $HOME/.node-gyp/${nodejs.version}/installVersion
-    #ln -sfv ${nodejs}/include $HOME/.node-gyp/${nodejs.version}
+    cp -r ${offlineCache}/node_modules frontend/
+    mkdir -p $HOME/.node-gyp/${nodejs.version}
+    echo 9 > $HOME/.node-gyp/${nodejs.version}/installVersion
+    ln -sfv ${nodejs}/include $HOME/.node-gyp/${nodejs.version}
+    export npm_config_nodedir=${nodejs}
     cd frontend
-    yarn config set cacheFolder ${offlineCache}
+    yarn config set enableTelemetry 0
+    yarn config set cacheFolder $offlineCache
     yarn install --immutable-cache
-    #export npm_config_nodedir=${nodejs}
     export NODE_OPTIONS=--max_old_space_size=4096
     cd -
   '';
   postBuild = ''
     cd frontend
-    faketty yarn run build
+    export PATH=./node_modules/.bin/cross-env:$PATH
+    yarn build
     cd -
     cp -r frontend/dist source
     cp -r frontend/src/assets/scss source/dist
     cp -r frontend/public/robots.txt source/dist
     cd source && rice embed-go && cd -
-    CGO_ENABLED=1 go build -a -ldflags "-s -w -X main.VERSION=${version}" -o statping-ng --tags "netgo osusergo" ./cmd
+    #cp statping-ng $out/bin/
   '';
+  postInstall = ''
+    mkdir -p $out/bin
+    '';
   ldflags = [
     "-s"
     "-w"
@@ -120,11 +140,6 @@ buildGoModule rec {
   preCheck = ''
     export ZONEINFO=${tzdata}/share/zoneinfo
     '';
-  postInstall = ''
-    mkdir -p $out/bin
-    cp statping-ng $out/bin/
-    '';
-  __darwinAllowLocalNetworking = true;
   passthru.tests = {
     inherit (nixosTests) statping-ng;
     version = testers.testVersion {
