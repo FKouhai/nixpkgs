@@ -14,6 +14,7 @@
   git,
   statping-ng,
   cacert,
+  webpack-cli,
   moreutils,
   jq,
   faketty,
@@ -60,8 +61,7 @@ buildGoModule rec {
       mkdir yarnCache
       yarn config set enableTelemetry 0
       yarn config set cacheFolder yarnCache
-      yarn
-      yarn --install --offline --cache-folder yarnCache
+      yarn --cache-folder yarnCache
       yarn config set --json supportedArchitectures.os '[ "linux", "darwin" ]'
       yarn config set --json supportedArchitectures.cpu '["arm64", "x64"]'
       runHook postBuild
@@ -76,13 +76,13 @@ buildGoModule rec {
     dontFixup = true;
     outputHashMode = "recursive";
     doCheck = false;
+    dontCheck = true;
     outputHashAlgo = "sha256";
     outputHash =
       rec {
-        x86_64-linux = "sha256-8EBYhJXHpOIh1AghUfXbFSdSyzUErE6ia4nu7BX0JOg=";
-        #x86_64-linux = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        x86_64-linux = "sha256-7NsGcogpLE9sTbaG3M0I72dp4z1r5MaJ6tzCbHHDnac=";
         aarch64-linux = x86_64-linux;
-        #aarch64-darwin = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        aarch64-darwin = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
       }
       .${stdenv.hostPlatform.system}
       or (throw "Unsupported system: ${stdenv.hostPlatform.system}");
@@ -97,6 +97,7 @@ buildGoModule rec {
       git
       yarn
       nodejs
+      webpack-cli
       removeReferencesTo
       faketty
       tzdata
@@ -107,6 +108,7 @@ buildGoModule rec {
     # (see https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/javascript.section.md#pitfalls-javascript-yarn2nix-pitfalls)
     export HOME="$(mktemp -d)"
     cp -r ${offlineCache}/node_modules frontend/
+    chmod +w frontend/node_modules
     mkdir -p $HOME/.node-gyp/${nodejs.version}
     echo 9 > $HOME/.node-gyp/${nodejs.version}/installVersion
     ln -sfv ${nodejs}/include $HOME/.node-gyp/${nodejs.version}
@@ -114,23 +116,25 @@ buildGoModule rec {
     cd frontend
     yarn config set enableTelemetry 0
     yarn config set cacheFolder $offlineCache
-    yarn install --immutable-cache
+    yarn install --immutable-cache --offline
     export NODE_OPTIONS=--max_old_space_size=4096
     cd -
   '';
   postBuild = ''
     cd frontend
-    export PATH=./node_modules/.bin/cross-env:$PATH
-    yarn build
-    cd -
+    #yarn local build
+    NODE_OPTIONS=--openssl-legacy-provider NODE_ENV=production webpack --mode production
+    cd ..
     cp -r frontend/dist source
     cp -r frontend/src/assets/scss source/dist
     cp -r frontend/public/robots.txt source/dist
     cd source && rice embed-go && cd -
-    #cp statping-ng $out/bin/
+    go build -a -ldflags "-s -w -X main.VERSION=${version}" -o statping-ng --tags "netgo osusergo" ./cmd
   '';
   postInstall = ''
     mkdir -p $out/bin
+    cp statping-ng $out/bin/
+    rm $out/bin/cmd
     '';
   ldflags = [
     "-s"
@@ -143,10 +147,12 @@ buildGoModule rec {
   passthru.tests = {
     inherit (nixosTests) statping-ng;
     version = testers.testVersion {
-      command = "statping version";
+    command = "statping version";
       package = statping-ng;
     };
   };
+  checkPhase=''
+    '';
   postFixup = ''
     while read line; do
       remove-references-to -t $offlineCache "$line"
